@@ -1,5 +1,6 @@
 /*
   Copyright (c) 2015 Hristo Gochkov (ficeto at ficeto dot com)
+  Modified by Rushikesh Patel 2018 CLI version (https://github.com/luffykesh)
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -15,46 +16,21 @@
   along with this program; if not, write to the Free Software Foundation,
   Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
-package com.ficeto.esp;
-import cc.arduino.files.DeleteFilesOnShutdown;
-import java.awt.*;
-import java.awt.event.*;
-import java.awt.event.ActionEvent;
-import java.io.BufferedReader;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.regex.*;
-import javax.swing.*;
-import javax.swing.filechooser.*;
-import javax.swing.event.DocumentEvent;
-import javax.swing.event.DocumentListener;
-import org.apache.commons.codec.digest.DigestUtils;
-import processing.app.Base;
-import processing.app.BaseNoGui;
-import processing.app.Editor;
-import processing.app.Platform;
-import processing.app.PreferencesData;
-import processing.app.Sketch;
-//import processing.app.SketchData;
-import processing.app.debug.TargetPlatform;
-import processing.app.helpers.FileUtils;
-import processing.app.helpers.OSUtils;
-import processing.app.helpers.ProcessUtils;
-import processing.app.tools.Tool;
 
-public class EspExceptionDecoder implements Tool, DocumentListener {
-  Editor editor;
-  JTextPane outputArea;
-  String outputText;
-  JTextArea inputArea;
-  JFrame frame;
+public class EspExceptionDecoder{
   File tool;
   File elf;
+  String exceptionFile;
+  String exceptionText;
+  String outputText;
+  String outputFile;
 
   private static String[] exceptions = {
     "Illegal instruction",
@@ -89,21 +65,21 @@ public class EspExceptionDecoder implements Tool, DocumentListener {
     "StoreProhibited: A store referenced a page mapped with an attribute that does not permit stores"
   };
   
-  public void init(Editor editor) {
-    this.editor = editor;
+  public static void main(String[] args) {
+    EspExceptionDecoder decoder = new EspExceptionDecoder();
+    decoder.decode(args);
   }
-
-  public String getMenuTitle() {
-    return "ESP Exception Decoder";
+  private void decode(String[] args)
+  {
+    parseCliArgs(args);
+    init();
+    runParser();
   }
-
-  // Original code from processing.app.helpers.ProcessUtils.exec()
-  // Need custom version to redirect STDERR to STDOUT for GDB processing
   public static Process execRedirected(String[] command) throws IOException {
     ProcessBuilder pb;
 
     // No problems on linux and mac
-    if (!OSUtils.isWindows()) {
+    if (!System.getProperty("os.name").startsWith("Windows")) {
       pb = new ProcessBuilder(command);
     } else {
       // Brutal hack to workaround windows command line parsing.
@@ -165,175 +141,99 @@ public class EspExceptionDecoder implements Tool, DocumentListener {
       public void run() {
         try {
           if(listenOnProcess(arguments) != 0){
-            editor.statusError("Decode Failed");
-            outputArea.setText("<html><font color=red>Decode Failed</font></html>");
+            System.out.println("Decode Failed");
           } else {
-            editor.statusNotice("Decode Success");
-            outputArea.setText(outputText);
+            if(outputFile==null)
+            {
+              System.out.println("Decode Success");
+              System.out.println(outputText);
+            }
+            else
+            {
+              try{
+                Files.write(Paths.get(outputFile),outputText.getBytes());
+              }
+              catch(Exception e) {
+                System.err.println("Error writing to: "+ outputFile);
+                System.err.println(e.getMessage());
+              }
+            }
           }
         } catch (Exception e){
-          editor.statusError("Decode Exception");
-          outputArea.setText("<html><font color=red><b>Decode Exception:</b> "+e.getMessage()+"</font></html>");
+          System.err.println("Decode Exception");
+          System.err.println(e.getMessage());
         }
       }
     };
     thread.start();
   }
-
-  private String getBuildFolderPath(Sketch s) {
-  // first of all try the getBuildPath() function introduced with IDE 1.6.12
-  // see commit arduino/Arduino#fd1541eb47d589f9b9ea7e558018a8cf49bb6d03
-  try {
-    String buildpath = s.getBuildPath().getAbsolutePath();
-    return buildpath;
-  }
-  catch (IOException er) {
-       editor.statusError(er);
-  }
-  catch (Exception er) {
-    try {
-        File buildFolder = FileUtils.createTempFolder("build", DigestUtils.md5Hex(s.getMainFilePath()) + ".tmp");
-        //DeleteFilesOnShutdown.add(buildFolder);
-        return buildFolder.getAbsolutePath();
+  private void parseCliArgs(String[] args)
+  {
+    for(int i = 0 ;i<args.length;++i)
+    {
+      if(args[i].equals("-e"))
+      {
+        elf = new File(args[i+1]);
+        ++i;
       }
-      catch (IOException e) {
-        editor.statusError(e);
+      else if(args[i].equals("-g"))
+      {
+        tool = new File(args[i+1]);
+        ++i;
       }
-      catch (Exception e) {
-        // Arduino 1.6.5 doesn't have FileUtils.createTempFolder
-        // String buildPath = BaseNoGui.getBuildFolder().getAbsolutePath();
-        java.lang.reflect.Method method;
-        try {
-          method = BaseNoGui.class.getMethod("getBuildFolder");
-          File f = (File) method.invoke(null);
-          return f.getAbsolutePath();
-        } catch (SecurityException ex) {
-          editor.statusError(ex);
-        } catch (IllegalAccessException ex) {
-          editor.statusError(ex);
-        } catch (InvocationTargetException ex) {
-          editor.statusError(ex);
-        } catch (NoSuchMethodException ex) {
-          editor.statusError(ex);
-        }
+      else if(args[i].equals("-x"))
+      {
+        exceptionFile = args[i+1];
+        ++i;
       }
-  }
-    return "";
-  }
-
-
-  private long getIntPref(String name){
-    String data = BaseNoGui.getBoardPreferences().get(name);
-    if(data == null || data.contentEquals("")) return 0;
-    if(data.startsWith("0x")) return Long.parseLong(data.substring(2), 16);
-    else return Integer.parseInt(data);
-  }
-
-  class ElfFilter extends FileFilter {
-    public String getExtension(File f) {
-        String ext = null;
-        String s = f.getName();
-        int i = s.lastIndexOf('.');
-        if (i > 0 &&  i < s.length() - 1) {
-            ext = s.substring(i+1).toLowerCase();
-        }
-        return ext;
-    }
-    public boolean accept(File f) {
-        if (f.isDirectory()) {
-            return true;
-        }
-        String extension = getExtension(f);
-        if (extension != null) {
-            return extension.equals("elf");
-        }
-        return false;
-    }
-    public String getDescription() {
-        return "*.elf files";
-    }
-  }
-
-  private void createAndUpload(){
-    if(!PreferencesData.get("target_platform").contentEquals("esp8266") && !PreferencesData.get("target_platform").contentEquals("esp32") && !PreferencesData.get("target_platform").contentEquals("ESP31B")){
-      System.err.println();
-      editor.statusError("Not Supported on "+PreferencesData.get("target_platform"));
-      return;
-    }
-
-    String tc = "esp32";
-    if(PreferencesData.get("target_platform").contentEquals("esp8266")){
-      tc = "lx106";
-    }
-
-    TargetPlatform platform = BaseNoGui.getTargetPlatform();
-
-    String gccPath = PreferencesData.get("runtime.tools.xtensa-"+tc+"-elf-gcc.path");
-    if(gccPath == null){
-      gccPath = platform.getFolder() + "/tools/xtensa-"+tc+"-elf";
-    }
-
-    String gdb;
-    if(PreferencesData.get("runtime.os").contentEquals("windows"))
-      gdb = "xtensa-"+tc+"-elf-gdb.exe";
-    else
-      gdb = "xtensa-"+tc+"-elf-gdb";
-
-    tool = new File(gccPath + "/bin", gdb);
-    if (!tool.exists() || !tool.isFile()) {
-      System.err.println();
-      editor.statusError("ERROR: "+gdb+" not found!");
-      return;
-    }
-
-    elf = new File(getBuildFolderPath(editor.getSketch()), editor.getSketch().getName() + ".ino.elf");
-    if (!elf.exists() || !elf.isFile()) {
-      elf = new File(getBuildFolderPath(editor.getSketch()), editor.getSketch().getName() + ".cpp.elf");
-      if (!elf.exists() || !elf.isFile()){
-        //lets give the user a chance to select the elf
-        final JFileChooser fc = new JFileChooser();
-        fc.addChoosableFileFilter(new ElfFilter());
-        fc.setAcceptAllFileFilterUsed(false);
-        int returnVal = fc.showDialog(editor, "Select ELF");
-        if (returnVal == JFileChooser.APPROVE_OPTION) {
-          elf = fc.getSelectedFile();
-        } else {
-          editor.statusError("ERROR: elf was not found!");
-          System.err.println("Open command cancelled by user.");
-          return;
-        }
+      else if(args[i].equals("-o"))
+      {
+        outputFile = args[i+1];
+        ++i;
       }
     }
+  }
 
-    JFrame.setDefaultLookAndFeelDecorated(true);
-    frame = new JFrame("Exception Decoder");
-    frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+  private void init(){
+    if(elf==null && System.getenv("ELF_FILE")!=null)
+      elf = new File(System.getenv("ELF_FILE"));
 
-    inputArea = new JTextArea("Paste your stack trace here", 16, 60);
-    inputArea.setLineWrap(true);
-    inputArea.setWrapStyleWord(true);
-    inputArea.getInputMap().put(KeyStroke.getKeyStroke("ENTER"), "commit");
-    inputArea.getActionMap().put("commit", new CommitAction());
-    inputArea.getDocument().addDocumentListener(this);
-    frame.getContentPane().add(new JScrollPane(inputArea), BorderLayout.PAGE_START);
+    if(tool == null && System.getenv("XTENSA_GDB")!=null)
+      tool = new File(System.getenv("XTENSA_GDB"));
     
-    outputText = "";
-    outputArea = new JTextPane();
-    outputArea.setContentType("text/html");
-    outputArea.setEditable(false);
-    outputArea.setBackground(null);
-    outputArea.setBorder(null);
-    outputArea.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true);
-    outputArea.setText(outputText);
-    
-    JScrollPane outputScrollPane = new JScrollPane(outputArea);
-    outputScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
-    outputScrollPane.setPreferredSize(new Dimension(640, 200));
-    outputScrollPane.setMinimumSize(new Dimension(10, 10));
-    frame.getContentPane().add(outputScrollPane, BorderLayout.CENTER);
-    
-    frame.pack();
-    frame.setVisible(true);
+    if(exceptionFile==null && System.getenv("EXP_FILE")!=null)
+      exceptionFile = System.getenv("EXP_FILE");
+
+    if(outputFile==null && System.getenv("DECODE_FILE")!=null)
+      outputFile = System.getenv("DECODE_FILE");
+
+    //default home directory
+    if(exceptionFile==null)
+      exceptionFile = System.getProperty("user.home") + File.separator + "exception.txt";
+
+
+    if (tool==null || (!tool.exists() || !tool.isFile())) {
+      System.err.println("GDB not found");
+      System.exit(2);
+    }
+    if (elf==null || (!elf.exists() || !elf.isFile())) {
+      System.err.println("ELF file not found");
+      System.exit(3);
+    }
+    if(exceptionFile==null && !Files.exists(Paths.get(exceptionFile)))
+    {
+      System.err.println("Exception file not found");
+      System.exit(4);
+    }
+    try
+    {
+      exceptionText = new String(Files.readAllBytes(Paths.get(exceptionFile)));
+    }
+    catch(IOException e)
+    {
+      System.err.println("Cannot read Exception file: "+ exceptionFile);
+      System.exit(1);
+    }
   }
 
   private String prettyPrintGDBLine(String line) {
@@ -361,15 +261,15 @@ public class EspExceptionDecoder implements Tool, DocumentListener {
           int slash = (lastfs > lastbs)?lastfs:lastbs;
           if(slash != -1){
             String filename = file.substring(slash+1);
-            file = file.substring(0,slash+1) + "<b>" + filename + "</b>";
+            file = file.substring(0,slash+1) + " " + filename + " ";
           }
         }
-        html = "<font color=green>" + address + ": </font>" +
-               "<b><font color=blue>" + method + "</font></b> at " +
-               file + " line <b>" + line + "</b>";
+        html = address + ": " +
+               method + " at " +
+               file + " line " + line;
     } catch (Exception e) {
         // Something weird in the GDB output format, report what we can
-        html = "<font color=green>" + address + ": </font> " + line;
+        html = address + ": " + line;
     }
 
     return html;
@@ -381,12 +281,8 @@ public class EspExceptionDecoder implements Tool, DocumentListener {
       outputText += s +"\n";
   }
 
-  public void run() {
-    createAndUpload();
-  }
-
   private void parseException(){
-    String content = inputArea.getText();
+    String content = exceptionText;
     Pattern p = Pattern.compile("Exception \\(([0-9]*)\\):");
     Matcher m = p.matcher(content);
     if(m.find()){
@@ -394,13 +290,13 @@ public class EspExceptionDecoder implements Tool, DocumentListener {
       if(exception < 0 || exception > 29){
         return;
       }
-      outputText += "<b><font color=red>Exception "+exception+": "+exceptions[exception]+"</font></b>\n";
+      outputText += "Exception "+exception+": "+exceptions[exception]+"\n";
     }
   }
 
   // Strip out just the STACK lines or BACKTRACE line, and generate the reference log
   private void parseStackOrBacktrace(String regexp, boolean multiLine, String stripAfter) {
-    String content = inputArea.getText();
+    String content = exceptionText;
 
     Pattern strip;
     if (multiLine) strip = Pattern.compile(regexp, Pattern.DOTALL);
@@ -445,7 +341,7 @@ public class EspExceptionDecoder implements Tool, DocumentListener {
     }
     command[i++] = "-ex";
     command[i++] = "q";
-    outputText += "\n<i>Decoding stack results</i>\n";
+    outputText += "\nDecoding stack results\n";
     sysExec(command);
   }
 
@@ -485,7 +381,7 @@ public class EspExceptionDecoder implements Tool, DocumentListener {
 
   // Scan and report the last failed memory allocation attempt, if present on the ESP8266
   private void parseAlloc() {
-    String content = inputArea.getText();
+    String content = exceptionText;
     Pattern p = Pattern.compile("last failed alloc call: 40[0-2](\\d|[a-f]|[A-F]){5}\\((\\d)+\\)");
     Matcher m = p.matcher(content);
     if (m.find()) {
@@ -509,7 +405,7 @@ public class EspExceptionDecoder implements Tool, DocumentListener {
 
   // Filter out a register output given a regex (ESP8266/ESP32 differ in format)
   private void parseRegister(String regName, String prettyName) {
-    String content = inputArea.getText();
+    String content = exceptionText;
     Pattern p = Pattern.compile(regName + "(\\d|[a-f]|[A-F]){8}\\b");
     Matcher m = p.matcher(content);
     if (m.find()) {
@@ -522,43 +418,28 @@ public class EspExceptionDecoder implements Tool, DocumentListener {
         if (line != null) {
           outputText += prettyName + ": " + line + "\n";
         } else {
-          outputText += prettyName + ": <font color=\"green\">0x" + addr + "</font>\n";
+          outputText += prettyName + ": 0x" + addr + "\n";
         }
       }
     }
   }
 
+  //entry point
   private void runParser(){
-    outputText = "<html><pre>\n";
+    outputText = "";
     // Main error cause
     parseException();
     // ESP8266 register format
-    parseRegister("epc1=0x", "<font color=\"red\">PC</font>");
-    parseRegister("excvaddr=0x", "<font color=\"red\">EXCVADDR</font>");
+    parseRegister("epc1=0x", "PC");
+    parseRegister("excvaddr=0x", "EXCVADDR");
     // ESP32 register format
-    parseRegister("PC\\s*:\\s*(0x)?", "<font color=\"red\">PC</font>");
-    parseRegister("EXCVADDR\\s*:\\s*(0x)?", "<font color=\"red\">EXCVADDR</font>");
+    parseRegister("PC\\s*:\\s*(0x)?", "PC");
+    parseRegister("EXCVADDR\\s*:\\s*(0x)?", "EXCVADDR");
     // Last memory allocation failure
     parseAlloc();
     // The stack on ESP8266, multiline
     parseStackOrBacktrace(">>>stack>>>(.)*", true, "<<<stack<<<");
     // The backtrace on ESP32, one-line only
     parseStackOrBacktrace("Backtrace:(.)*", false, null);
-  }
-
-  private class CommitAction extends AbstractAction {
-    public void actionPerformed(ActionEvent ev) {
-      runParser();
-    }
-  }
-
-  public void changedUpdate(DocumentEvent ev) {
-  }
-
-  public void removeUpdate(DocumentEvent ev) {
-  }
-
-  public void insertUpdate(DocumentEvent ev) {
-    runParser();
   }
 }
