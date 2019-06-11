@@ -17,5 +17,5 @@ CLI arguments take priority over environment variables.
 ## Credits and license
 
 - Copyright (c) 2015 Hristo Gochkov (ficeto at ficeto dot com)
-- Modified by Rushikesh Patel 2018 (https://gituhb.com/luffykesh)
+- Modified by Rushikesh Patel 2018 (https://github.com/luffykesh)
 - Licensed under GPL v2 ([text](LICENSE))
