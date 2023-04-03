@@ -1,0 +1,1 @@
+java EspExceptionDecoder -e ..\..\.pio\build\esp32doit\firmware.elf -x ..\..\exception.txt -g "C:\Users\Hamza\.platformio\packages\toolchain-xtensa-esp32\bin\xtensa-esp32-elf-gdb.exe"
